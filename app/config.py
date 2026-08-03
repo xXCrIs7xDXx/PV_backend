@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # demasiado la deteccion real de una caida.
     monitor_confirm_failures: int = 2
     auto_close_tickets: bool = True
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "*"
 
     # Off by default: each successful POST writes a permanent row into the
     # university's real audit spreadsheets. Flip to true only when ready -
@@ -70,7 +70,10 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        if not self.cors_origins or self.cors_origins.strip() == "*":
+            return ["*"]
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return origins if origins else ["*"]
 
 
 settings = Settings()
