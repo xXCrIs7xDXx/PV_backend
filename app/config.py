@@ -1,3 +1,5 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,6 +8,36 @@ class Settings(BaseSettings):
 
     database_url: str
     admin_password: str
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def clean_database_url(cls, v: str) -> str:
+        if not v:
+            return v
+        url = v.strip()
+        # Asegura el scheme adecuado para asyncpg
+        for prefix in ("postgres://", "postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://"):
+            if url.startswith(prefix):
+                url = "postgresql+asyncpg://" + url[len(prefix):]
+                break
+
+        # Filtra parametros no soportados por asyncpg (como channel_binding)
+        parts = urlsplit(url)
+        if parts.query:
+            query_params = parse_qsl(parts.query, keep_blank_values=True)
+            filtered: list[tuple[str, str]] = []
+            for key, val in query_params:
+                k_lower = key.lower()
+                if k_lower in ("channel_binding",):
+                    continue
+                if k_lower == "sslmode":
+                    filtered.append(("ssl", val))
+                else:
+                    filtered.append((key, val))
+            new_query = urlencode(filtered)
+            url = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+        return url
     monitor_interval_hours: float = 10.0
     monitor_timeout_seconds: float = 30.0
     monitor_max_concurrency: int = 15

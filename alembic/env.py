@@ -25,7 +25,12 @@ if config.config_file_name is not None:
 
 # Alembic's default runner is sync; reuse the same DB but via the sync
 # psycopg2 driver instead of asyncpg used by the FastAPI app at runtime.
-sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+sync_url = (
+    settings.database_url
+    .replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    .replace("?ssl=", "?sslmode=")
+    .replace("&ssl=", "&sslmode=")
+)
 config.set_main_option("sqlalchemy.url", sync_url)
 
 # Models mirror the pre-existing, immutable DDL exactly (see app/models/).
