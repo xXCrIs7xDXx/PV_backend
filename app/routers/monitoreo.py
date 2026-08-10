@@ -2,7 +2,7 @@ import asyncio
 import csv
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -35,17 +35,17 @@ async def estado() -> MonitorEstado:
 from app.services.retencion_service import purgar_registros_antiguos
 
 @router.get("/forzar-ejecucion")
-async def forzar_ejecucion() -> dict:
+async def forzar_ejecucion(background_tasks: BackgroundTasks) -> dict:
     if monitor_engine.monitor_lock.locked():
         return {"ok": False, "error": "Ya hay una verificacion en curso"}
     
-    # Esperamos a que termine para devolver la confirmacion
-    await monitor_engine.run_check_cycle(tipo="Externa")
+    # Ejecutamos en segundo plano para que Cron-job.org reciba el 200 OK inmediatamente
+    background_tasks.add_task(monitor_engine.run_check_cycle, tipo="Externa")
     
-    # Aprovechamos para purgar registros antiguos
-    asyncio.create_task(purgar_registros_antiguos())
+    # Aprovechamos para purgar registros antiguos de la misma forma
+    background_tasks.add_task(purgar_registros_antiguos)
     
-    return {"ok": True, "message": "Ciclo de monitoreo completado"}
+    return {"mensaje": "Monitoreo iniciado en segundo plano exitosamente"}
 
 
 @router.post("/ejecutar", dependencies=[Depends(require_admin)])
