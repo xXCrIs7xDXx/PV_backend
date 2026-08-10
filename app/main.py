@@ -77,6 +77,8 @@ for _router in (
     app.include_router(_router)
 
 
+@app.get("/")
+@app.get("/health")
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"status": "ok"}
