@@ -32,6 +32,22 @@ async def estado() -> MonitorEstado:
     )
 
 
+from app.services.retencion_service import purgar_registros_antiguos
+
+@router.get("/forzar-ejecucion")
+async def forzar_ejecucion() -> dict:
+    if monitor_engine.monitor_lock.locked():
+        return {"ok": False, "error": "Ya hay una verificacion en curso"}
+    
+    # Esperamos a que termine para devolver la confirmacion
+    await monitor_engine.run_check_cycle(tipo="Externa")
+    
+    # Aprovechamos para purgar registros antiguos
+    asyncio.create_task(purgar_registros_antiguos())
+    
+    return {"ok": True, "message": "Ciclo de monitoreo completado"}
+
+
 @router.post("/ejecutar", dependencies=[Depends(require_admin)])
 async def ejecutar() -> dict:
     if monitor_engine.monitor_lock.locked():

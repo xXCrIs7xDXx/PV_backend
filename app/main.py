@@ -29,28 +29,8 @@ from app.services.retencion_service import purgar_registros_antiguos
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        run_check_cycle,
-        "interval",
-        hours=settings.monitor_interval_hours,
-        id="monitor_cycle",
-        next_run_time=datetime.now(),
-        coalesce=True,
-        misfire_grace_time=60,
-    )
-    scheduler.add_job(
-        purgar_registros_antiguos,
-        "interval",
-        hours=24,
-        id="purga_registros",
-        coalesce=True,
-        misfire_grace_time=3600,
-    )
-    scheduler.start()
-    app.state.scheduler = scheduler
+    # Ya no usamos APScheduler interno, el monitoreo se dispara externamente
     yield
-    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Monitoreo Campus Virtuales UMSA", lifespan=lifespan)
@@ -81,4 +61,4 @@ for _router in (
 @app.get("/health")
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "message": "Backend DTIC activo"}
