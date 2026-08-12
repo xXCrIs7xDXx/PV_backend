@@ -253,32 +253,22 @@ async def seed(xlsx_path: Path) -> None:
             if ip_publica:
                 servidor_by_ip[ip_publica] = obj.id_servidor
 
-        # --- Step 5: placeholder "external" servidor for orphan IPs ----------
-        orphan_ips = []
-        seen_orphan = set()
-        for r in resp_rows:
-            ip = clean_str(r[7])
-            if ip and ip not in servidor_by_ip and ip not in seen_orphan:
-                seen_orphan.add(ip)
-                orphan_ips.append(ip)
-
-        for ip in orphan_ips:
-            hostname = f"SRV-EXTERNO-{ip}"
-            obj = await upsert(
-                session,
-                Servidor,
-                {"hostname": hostname},
-                {
-                    "ip_publica": ip,
-                    "ip_privada": ip,
-                    "vcpu": None,
-                    "memoria_ram_gb": None,
-                    "espacio_disco_gb": None,
-                    "sistema_operativo": None,
-                    "estado_servidor": "Desconocido",
-                },
-            )
-            servidor_by_ip[ip] = obj.id_servidor
+        # --- Step 5: single "Externo" servidor for orphan/missing IPs ----------
+        obj_externo = await upsert(
+            session,
+            Servidor,
+            {"hostname": "Externo"},
+            {
+                "ip_publica": None,
+                "ip_privada": "N/A",
+                "vcpu": None,
+                "memoria_ram_gb": None,
+                "espacio_disco_gb": None,
+                "sistema_operativo": None,
+                "estado_servidor": "Desconocido",
+            },
+        )
+        id_externo = obj_externo.id_servidor
 
         # --- Step 6: responsable (2026 overrides 2025, dedupe, placeholders) --
         responsable_id_by_row: list[int] = []
@@ -333,12 +323,7 @@ async def seed(xlsx_path: Path) -> None:
             else:
                 id_unidad = child_id[(fac, carrera or tipo_raw)]
 
-            id_servidor = servidor_by_ip.get(ip)
-            if id_servidor is None:
-                # IP wasn't seen in step 4/5 (shouldn't happen, all IPs are
-                # covered by the inventory or the orphan pass) - skip safely.
-                dup_report.append((r[0], fac, tipo_raw, carrera, f"{link} (sin servidor para IP {ip})"))
-                continue
+            id_servidor = servidor_by_ip.get(ip, id_externo)
 
             nombre_plataforma = f"{fac} - {carrera or tipo_raw}" if tipo_raw and tipo_raw != "Facultad" else fac
             nombre_plataforma = nombre_plataforma[:150]
@@ -368,7 +353,6 @@ async def seed(xlsx_path: Path) -> None:
     print(f"Unidades academicas (facultades): {len(facultad_id)}")
     print(f"Unidades academicas (hijas): {len(child_id)}")
     print(f"Servidores del inventario: {len(servidor_by_hostname)}")
-    print(f"Servidores placeholder externos: {len(orphan_ips)}")
     if skipped_servers:
         print(f"Servidores omitidos (sin IP publica ni privada): {skipped_servers}")
     print(f"Responsables (filas procesadas, tras deduplicar por correo/nombre): {len(set(responsable_id_by_row))}")
