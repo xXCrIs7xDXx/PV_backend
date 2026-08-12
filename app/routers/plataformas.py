@@ -128,9 +128,12 @@ async def create_plataforma(body: PlataformaCreate, session: AsyncSession = Depe
     session.add(obj)
     try:
         await session.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await session.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
+        err_str = str(e.orig).lower()
+        if "unique" in err_str or "duplicate" in err_str:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Por favor, completa todos los campos desplegables (Unidad, Servidor, Responsable, Tipo).")
     await session.refresh(obj)
     return obj
 
@@ -148,9 +151,12 @@ async def update_plataforma(
     session.add(obj)
     try:
         await session.commit()
-    except IntegrityError:
+    except IntegrityError as e:
         await session.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
+        err_str = str(e.orig).lower()
+        if "unique" in err_str or "duplicate" in err_str:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Por favor, completa todos los campos desplegables (Unidad, Servidor, Responsable, Tipo).")
     await session.refresh(obj)
 
     # Notificar por Telegram solo cuando un admin saca manualmente una
