@@ -9,7 +9,8 @@ from app.schemas.monitoreo import RegistroMonitoreoRead
 
 class PlataformaCreate(BaseModel):
     id_unidad: int
-    id_servidor: int
+    id_servidor: int = 0
+    ip_publica: Optional[str] = None
     id_responsable: int
     id_tipo_plataforma: int
     nombre_plataforma: str

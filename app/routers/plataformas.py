@@ -140,7 +140,25 @@ async def get_plataforma(id_plataforma: int, session: AsyncSession = Depends(get
 
 @router.post("", response_model=PlataformaRead, dependencies=[Depends(require_admin)])
 async def create_plataforma(body: PlataformaCreate, session: AsyncSession = Depends(get_session)):
-    obj = Plataforma(**body.model_dump())
+    body_dump = body.model_dump()
+    ip_publica = body_dump.pop("ip_publica", None)
+    
+    if ip_publica:
+        # Create a new external server on the fly
+        new_srv = Servidor(
+            hostname="Externo",
+            ip_publica=ip_publica,
+            ip_privada=ip_publica,
+            estado_servidor="Desconocido"
+        )
+        session.add(new_srv)
+        await session.commit()
+        await session.refresh(new_srv)
+        body_dump["id_servidor"] = new_srv.id_servidor
+    elif body_dump.get("id_servidor", 0) == 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Debes seleccionar un servidor o proveer una IP pública externa.")
+
+    obj = Plataforma(**body_dump)
     session.add(obj)
     try:
         await session.commit()
