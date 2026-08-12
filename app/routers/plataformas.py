@@ -44,6 +44,8 @@ async def list_plataformas(
             Plataforma,
             UnidadAcademica.nombre,
             Servidor.hostname,
+            Servidor.ip_publica,
+            Servidor.ip_privada,
             Responsable.nombre_completo,
             TipoPlataforma.nombre_tipo,
             RegistroMonitoreo.estado_http,
@@ -70,12 +72,18 @@ async def list_plataformas(
     rows = (await session.exec(stmt)).all()
     unidad_display = await build_unidad_display_names(session)
     out = []
-    for plat, nombre_unidad, hostname, nombre_responsable, nombre_tipo, estado_http, tiempo_ms, fecha in rows:
+    for plat, nombre_unidad, hostname, ip_pub, ip_priv, nombre_responsable, nombre_tipo, estado_http, tiempo_ms, fecha in rows:
+        disp_servidor = hostname
+        if hostname.lower() == "externo":
+            ip = ip_pub or ip_priv
+            if ip and ip != "N/A":
+                disp_servidor = f"Externo - {ip}"
+
         out.append(
             PlataformaReadExpanded(
                 **plat.model_dump(),
                 nombre_unidad=unidad_display.get(plat.id_unidad, nombre_unidad),
-                nombre_servidor=hostname,
+                nombre_servidor=disp_servidor,
                 nombre_responsable=nombre_responsable,
                 nombre_tipo_plataforma=nombre_tipo,
                 ultimo_estado_http=estado_http,
@@ -104,11 +112,19 @@ async def get_plataforma_detalle(id_plataforma: int, session: AsyncSession = Dep
         .limit(20)
     )
     historial = (await session.exec(historial_stmt)).all()
+    
+    # Formatear el nombre del servidor externo para incluir la IP
+    from app.schemas.catalogo import ServidorRead
+    srv_dto = ServidorRead.model_validate(servidor) if servidor else None
+    if srv_dto and srv_dto.hostname.lower() == "externo":
+        ip = srv_dto.ip_publica or srv_dto.ip_privada
+        if ip and ip != "N/A":
+            srv_dto.hostname = f"Externo - {ip}"
 
     return PlataformaDetalle(
         plataforma=plataforma,
         nombre_unidad=unidad_display.get(plataforma.id_unidad, unidad.nombre if unidad else "—"),
-        servidor=servidor,
+        servidor=srv_dto,
         responsable=responsable,
         historial=historial,
     )
@@ -128,12 +144,9 @@ async def create_plataforma(body: PlataformaCreate, session: AsyncSession = Depe
     session.add(obj)
     try:
         await session.commit()
-    except IntegrityError as e:
+    except IntegrityError:
         await session.rollback()
-        err_str = str(e.orig).lower()
-        if "unique" in err_str or "duplicate" in err_str:
-            raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Por favor, completa todos los campos desplegables (Unidad, Servidor, Responsable, Tipo).")
+        raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
     await session.refresh(obj)
     return obj
 
@@ -151,12 +164,9 @@ async def update_plataforma(
     session.add(obj)
     try:
         await session.commit()
-    except IntegrityError as e:
+    except IntegrityError:
         await session.rollback()
-        err_str = str(e.orig).lower()
-        if "unique" in err_str or "duplicate" in err_str:
-            raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Por favor, completa todos los campos desplegables (Unidad, Servidor, Responsable, Tipo).")
+        raise HTTPException(status.HTTP_409_CONFLICT, "Esa URL ya esta registrada en otra plataforma")
     await session.refresh(obj)
 
     # Notificar por Telegram solo cuando un admin saca manualmente una

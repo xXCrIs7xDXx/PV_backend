@@ -19,8 +19,15 @@ async def list_servidores(
     stmt = select(Servidor)
     if not include_deleted:
         stmt = stmt.where(Servidor.deleted_at.is_(None))
-    result = await session.exec(stmt)
-    return result.all()
+    out = []
+    for srv in (await session.exec(stmt)).all():
+        dto = ServidorRead.model_validate(srv)
+        if dto.hostname.lower() == "externo":
+            ip = dto.ip_publica or dto.ip_privada
+            if ip and ip != "N/A":
+                dto.hostname = f"Externo - {ip}"
+        out.append(dto)
+    return out
 
 
 @router.get("/{id_servidor}", response_model=ServidorRead)
