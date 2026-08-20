@@ -47,6 +47,8 @@ class PlataformaReadExpanded(PlataformaRead):
 
     nombre_unidad: Optional[str] = None
     nombre_servidor: Optional[str] = None
+    ip_publica: Optional[str] = None
+    ip_privada: Optional[str] = None
     nombre_responsable: Optional[str] = None
     nombre_tipo_plataforma: Optional[str] = None
     ultimo_estado_http: Optional[int] = None

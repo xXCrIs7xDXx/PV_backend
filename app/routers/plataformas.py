@@ -84,6 +84,8 @@ async def list_plataformas(
                 **plat.model_dump(),
                 nombre_unidad=unidad_display.get(plat.id_unidad, nombre_unidad),
                 nombre_servidor=disp_servidor,
+                ip_publica=ip_pub,
+                ip_privada=ip_priv,
                 nombre_responsable=nombre_responsable,
                 nombre_tipo_plataforma=nombre_tipo,
                 ultimo_estado_http=estado_http,
