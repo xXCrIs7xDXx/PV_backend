@@ -15,6 +15,7 @@ from app.routers import (
     auth,
     catalogos,
     dashboard,
+    informes,
     monitoreo,
     plataformas,
     responsables,
@@ -40,6 +41,9 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Para que el frontend pueda leer el nombre del PDF del informe
+    # ("Monitorizacion dd-mm-aaaa hh.mm.pdf") al descargarlo.
+    expose_headers=["Content-Disposition"],
 )
 
 for _router in (
@@ -53,6 +57,7 @@ for _router in (
     monitoreo.router,
     tickets.router,
     stats.router,
+    informes.router,
 ):
     app.include_router(_router)
 

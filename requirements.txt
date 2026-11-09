@@ -1,6 +1,13 @@
 fastapi>=0.115
 uvicorn[standard]>=0.32
-sqlmodel>=0.0.22
+# sqlmodel 0.0.45+ rechaza datetimes sin zona horaria ("Datetime values must
+# have timezone information") y todo el backend usa datetime.utcnow(): con esa
+# version el monitoreo no podria guardar registros. Ademas SQLAlchemy 2.1 ya
+# no instala greenlet, sin el cual el motor async ni siquiera importa.
+# Topes fijados para que un deploy limpio en Render no rompa produccion.
+sqlmodel>=0.0.22,<0.0.45
+sqlalchemy>=2.0,<2.1
+greenlet>=3.0
 asyncpg>=0.30
 alembic>=1.14
 psycopg2-binary>=2.9
@@ -9,3 +16,4 @@ apscheduler>=3.10,<4.0
 pydantic-settings>=2.6
 openpyxl>=3.1
 python-multipart>=0.0.12
+reportlab>=4.2,<5
