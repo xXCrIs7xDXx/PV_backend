@@ -1,17 +1,16 @@
 import asyncio
 import sys
-from contextlib import asynccontextmanager
-from datetime import datetime
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore
+# psycopg/asyncpg en Windows necesitan el event loop "selector" (solo afecta
+# al desarrollo local; Render corre en Linux).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
-from app.config import settings
-from app.routers import (
+from app.config import settings  # noqa: E402
+from app.routers import (  # noqa: E402
     auth,
     catalogos,
     dashboard,
@@ -24,17 +23,11 @@ from app.routers import (
     tickets,
     unidades,
 )
-from app.services.monitor_engine import run_check_cycle
-from app.services.retencion_service import purgar_registros_antiguos
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Ya no usamos APScheduler interno, el monitoreo se dispara externamente
-    yield
-
-
-app = FastAPI(title="Monitoreo Campus Virtuales UMSA", lifespan=lifespan)
+# No hay scheduler interno: Render (plan gratuito) duerme el servicio, asi que
+# el ciclo de monitoreo lo dispara cron-job.org llamando a
+# GET /api/monitoreo/forzar-ejecucion cada hora (ver README).
+app = FastAPI(title="Monitoreo Campus Virtuales UMSA")
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,4 +59,5 @@ for _router in (
 @app.get("/health")
 @app.get("/api/health")
 def health() -> dict:
+    """Keep-alive de cron-job.org (cada 10 min) para que Render no duerma."""
     return {"status": "ok", "message": "Backend DTIC activo"}

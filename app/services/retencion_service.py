@@ -1,7 +1,7 @@
 """Purga las filas viejas de registro_monitoreo para que la tabla no crezca
-para siempre (~68 plataformas x una fila por verificacion). Corre como un
-job diario de APScheduler (ver app/main.py), totalmente separado del ciclo
-de monitoreo: si falla, no debe afectar las verificaciones ni el resto de
+para siempre (~70 plataformas x una fila por verificacion). Corre despues de
+cada ciclo disparado por cron-job.org (GET /api/monitoreo/forzar-ejecucion),
+como tarea separada: si falla, no afecta las verificaciones ni el resto de
 la app.
 
 ticket_incidencia NUNCA se purga aqui - es la bitacora de incidencias
@@ -27,7 +27,7 @@ async def purgar_registros_antiguos() -> int:
             if borrados:
                 print(f"Retencion: se purgaron {borrados} registros de monitoreo anteriores a {limite.date()}")
             return borrados
-        except Exception as e:  # noqa: BLE001 - este job nunca debe tirar abajo el scheduler
+        except Exception as e:  # noqa: BLE001 - la purga nunca debe afectar al monitoreo
             await session.rollback()
             print(f"Retencion: error al purgar registros antiguos -> {e}")
             return 0

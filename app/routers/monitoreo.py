@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings
 from app.db import get_session
 from app.deps import require_admin
 from app.models import EjecucionMonitoreo, Plataforma, RegistroMonitoreo
@@ -19,9 +20,20 @@ from app.schemas.monitoreo import (
     RegistroMonitoreoRead,
 )
 from app.services import monitor_engine
+from app.services.retencion_service import purgar_registros_antiguos
 from app.services.unidades_display import build_unidad_display_names
 
 router = APIRouter(prefix="/api/monitoreo", tags=["monitoreo"])
+
+# asyncio solo guarda referencias debiles a las tareas: sin esto una tarea
+# lanzada con create_task podria ser recolectada antes de terminar.
+_tareas: set[asyncio.Task] = set()
+
+
+def _lanzar(coro) -> None:
+    tarea = asyncio.create_task(coro)
+    _tareas.add(tarea)
+    tarea.add_done_callback(_tareas.discard)
 
 
 @router.get("/estado", response_model=MonitorEstado)
@@ -32,27 +44,26 @@ async def estado() -> MonitorEstado:
     )
 
 
-from app.services.retencion_service import purgar_registros_antiguos
-
 @router.get("/forzar-ejecucion")
-async def forzar_ejecucion(background_tasks: BackgroundTasks) -> dict:
+async def forzar_ejecucion(background_tasks: BackgroundTasks, token: str | None = Query(default=None)) -> dict:
+    """Disparado por cron-job.org cada hora. Responde de inmediato y corre el
+    ciclo en segundo plano (cron-job.org corta la espera a los 30 s). Si
+    CRON_TOKEN esta configurado, exige ?token=<CRON_TOKEN>."""
+    if settings.cron_token and token != settings.cron_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token de cron invalido")
     if monitor_engine.monitor_lock.locked():
         return {"ok": False, "error": "Ya hay una verificacion en curso"}
-    
-    # Ejecutamos en segundo plano para que Cron-job.org reciba el 200 OK inmediatamente
     background_tasks.add_task(monitor_engine.run_check_cycle, tipo="Externa")
-    
-    # Aprovechamos para purgar registros antiguos de la misma forma
+    # Mantenimiento: borra el historial mas antiguo que RETENCION_REGISTROS_MESES
     background_tasks.add_task(purgar_registros_antiguos)
-    
-    return {"mensaje": "Monitoreo iniciado en segundo plano exitosamente"}
+    return {"ok": True, "mensaje": "Monitoreo iniciado en segundo plano"}
 
 
 @router.post("/ejecutar", dependencies=[Depends(require_admin)])
 async def ejecutar() -> dict:
     if monitor_engine.monitor_lock.locked():
         return {"ok": False, "error": "Ya hay una verificacion en curso"}
-    asyncio.create_task(monitor_engine.run_check_cycle(tipo="Manual"))
+    _lanzar(monitor_engine.run_check_cycle(tipo="Manual"))
     return {"ok": True}
 
 
@@ -71,7 +82,7 @@ async def forms_estado() -> FormsEstado:
 async def enviar_forms() -> dict:
     if monitor_engine.forms_lock.locked():
         return {"ok": False, "error": "Ya hay un envio a Google Forms en curso"}
-    asyncio.create_task(monitor_engine.enviar_forms_manual())
+    _lanzar(monitor_engine.enviar_forms_manual())
     return {"ok": True}
 
 
@@ -193,7 +204,7 @@ async def exportar_csv(session: AsyncSession = Depends(get_session)) -> Streamin
             ]
         )
     return StreamingResponse(
-        iter(["﻿" + out.getvalue()]),
+        iter(["\ufeff" + out.getvalue()]),  # BOM: Excel abre bien los acentos
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=monitoreo_umsa.csv"},
     )

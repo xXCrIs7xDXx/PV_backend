@@ -38,7 +38,7 @@ class Settings(BaseSettings):
             url = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
         return url
-    monitor_interval_hours: float = 10.0
+
     monitor_timeout_seconds: float = 30.0
     monitor_max_concurrency: int = 15
     # Cuantos ciclos consecutivos de fallo se requieren antes de marcar una
@@ -49,11 +49,13 @@ class Settings(BaseSettings):
     auto_close_tickets: bool = True
     cors_origins: str = "*"
 
-    # Off by default: each successful POST writes a permanent row into the
-    # university's real audit spreadsheets. Flip to true only when ready -
-    # the next monitoring cycle (scheduled or "Verificar ahora") will then
-    # submit live results for every platform. See forms_service.py.
-    google_forms_enabled: bool = False
+    # Opcional. Si se define, GET /api/monitoreo/forzar-ejecucion exige
+    # ?token=<CRON_TOKEN> (asi un tercero no puede disparar ciclos). Vacio =
+    # endpoint abierto, como hasta ahora.
+    cron_token: str | None = None
+
+    # Envio a los Google Forms de auditoria: solo manual, con el boton
+    # "Enviar a Google Forms" del panel (ver forms_service.py).
     google_forms_timeout_seconds: float = 8.0
     google_forms_max_concurrency: int = 10
 

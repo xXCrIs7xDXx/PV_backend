@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -49,12 +49,16 @@ class ResponsableCreate(BaseModel):
     nombre_completo: str
     correo_institucional: str
     telefono: Optional[str] = None
+    tipo_contrato: Optional[str] = None
+    fecha_actualizacion: Optional[date] = None
 
 
 class ResponsableUpdate(BaseModel):
     nombre_completo: Optional[str] = None
     correo_institucional: Optional[str] = None
     telefono: Optional[str] = None
+    tipo_contrato: Optional[str] = None
+    fecha_actualizacion: Optional[date] = None
 
 
 class ResponsableRead(BaseModel):
@@ -64,6 +68,8 @@ class ResponsableRead(BaseModel):
     nombre_completo: str
     correo_institucional: str
     telefono: Optional[str]
+    tipo_contrato: Optional[str] = None
+    fecha_actualizacion: Optional[date] = None
     deleted_at: Optional[datetime]
 
 
@@ -76,6 +82,7 @@ class ServidorCreate(BaseModel):
     espacio_disco_gb: Optional[int] = None
     sistema_operativo: Optional[str] = None
     estado_servidor: Optional[str] = "Activo"
+    tecnologia: Optional[str] = None
 
 
 class ServidorUpdate(BaseModel):
@@ -87,6 +94,7 @@ class ServidorUpdate(BaseModel):
     espacio_disco_gb: Optional[int] = None
     sistema_operativo: Optional[str] = None
     estado_servidor: Optional[str] = None
+    tecnologia: Optional[str] = None
 
 
 class ServidorRead(BaseModel):
@@ -101,4 +109,5 @@ class ServidorRead(BaseModel):
     espacio_disco_gb: Optional[int]
     sistema_operativo: Optional[str]
     estado_servidor: Optional[str]
+    tecnologia: Optional[str] = None
     deleted_at: Optional[datetime]

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -35,9 +35,12 @@ class Responsable(SQLModel, table=True):
     __tablename__ = "responsable"
 
     id_responsable: Optional[int] = Field(default=None, primary_key=True)
-    nombre_completo: str = Field(max_length=150, nullable=False)
+    nombre_completo: str = Field(max_length=255, nullable=False)
     correo_institucional: str = Field(max_length=100, nullable=False)
-    telefono: Optional[str] = Field(default=None, max_length=20)
+    telefono: Optional[str] = Field(default=None, max_length=50)
+    # Datos de la hoja "1RespXFac" (columnas 2026)
+    tipo_contrato: Optional[str] = Field(default=None, max_length=50)
+    fecha_actualizacion: Optional[date] = Field(default=None)
     deleted_at: Optional[datetime] = Field(default=None)
 
 
@@ -53,4 +56,6 @@ class Servidor(SQLModel, table=True):
     espacio_disco_gb: Optional[int] = Field(default=None)
     sistema_operativo: Optional[str] = Field(default=None, max_length=50)
     estado_servidor: Optional[str] = Field(default="Activo", max_length=50)
+    # HIPERCONVERGENTE | BLADE | PROXMOX | EXTERNO (hoja "1RespXFac")
+    tecnologia: Optional[str] = Field(default=None, max_length=50)
     deleted_at: Optional[datetime] = Field(default=None)

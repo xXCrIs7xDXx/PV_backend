@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import Column, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -16,3 +17,8 @@ class Plataforma(SQLModel, table=True):
     url_principal: str = Field(max_length=255, nullable=False, unique=True)
     estado_actual: Optional[str] = Field(default="Operativo", max_length=50)
     deleted_at: Optional[datetime] = Field(default=None)
+    # Notas administrativas de la hoja "1RespXFac"
+    notas_credenciales: Optional[str] = Field(default=None, sa_column=Column(Text))
+    notas_migracion: Optional[str] = Field(default=None, sa_column=Column(Text))
+    # Responsable del periodo anterior (columnas 2025), solo como referencia
+    responsable_anterior: Optional[str] = Field(default=None, sa_column=Column(Text))

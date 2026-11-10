@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -35,6 +35,10 @@ class InformeResumen(BaseModel):
 
 class InformeDatos(BaseModel):
     fecha_generacion: datetime  # hora local de Bolivia (UTC-4)
+    # Dia del historial pedido (None = estado actual de las plataformas)
+    fecha_informe: Optional[date] = None
+    # Hora (Bolivia) de la verificacion en la que se basan los datos
+    fecha_datos: Optional[datetime] = None
     nombre_archivo: str
     resumen: InformeResumen
     filas: list[InformeFila]
@@ -44,3 +48,8 @@ class InformePdfRequest(BaseModel):
     # id_plataforma -> descripcion escrita por el admin. Las claves de
     # plataformas que no estan "En Revision" se ignoran en el servidor.
     descripciones: dict[int, str] = Field(default_factory=dict)
+    # Dia del historial (hora de Bolivia). Sin fecha = estado actual.
+    fecha: Optional[date] = None
+    # id_plataforma -> estado a mostrar SOLO en este informe (no se guarda en
+    # la base). Valores validos: ESTADOS_INFORME; los demas se ignoran.
+    estados: dict[int, str] = Field(default_factory=dict)

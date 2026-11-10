@@ -13,6 +13,8 @@ tickets_service.handle_transition y en routers/plataformas.py, que solo
 disparan la notificacion cuando el estado ANTERIOR era "Operativo")."""
 from __future__ import annotations
 
+from html import escape
+
 import httpx
 
 from app.config import settings
@@ -29,7 +31,7 @@ async def _enviar_mensaje(texto: str) -> None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 url,
-                data={"chat_id": settings.telegram_chat_id, "text": texto, "parse_mode": "Markdown"},
+                data={"chat_id": settings.telegram_chat_id, "text": texto, "parse_mode": "HTML"},
             )
             if resp.status_code != 200:
                 print(f"Telegram: fallo al enviar notificacion -> HTTP {resp.status_code} {resp.text[:200]}")
@@ -44,16 +46,16 @@ async def notificar_caida_automatica(
     estado_http: int | None = None,
     tiempo_ms: int | None = None,
 ) -> None:
-    lineas = [f"\U0001F534 *{plataforma.nombre_plataforma}* no responde", ""]
+    lineas = [f"\U0001F534 <b>{escape(plataforma.nombre_plataforma)}</b> no responde", ""]
     if estado_http:
-        lineas.append(f"📋 Error: HTTP {estado_http} — {categoria}")
+        lineas.append(f"📋 Error: HTTP {estado_http} — {escape(categoria)}")
     elif observacion:
-        lineas.append(f"📋 Error: {observacion}")
+        lineas.append(f"📋 Error: {escape(observacion)}")
     else:
-        lineas.append(f"📋 Error: {categoria}")
+        lineas.append(f"📋 Error: {escape(categoria)}")
     if tiempo_ms is not None:
         lineas.append(f"⏱ Tiempo: {tiempo_ms:,}ms")
-    lineas.append(f"🌐 URL: {plataforma.url_principal}")
+    lineas.append(f"🌐 URL: {escape(plataforma.url_principal)}")
     await _enviar_mensaje("\n".join(lineas))
 
 
@@ -61,16 +63,16 @@ async def notificar_recuperacion_automatica(
     plataforma: Plataforma,
     tiempo_ms: int | None = None,
 ) -> None:
-    lineas = [f"✅ *{plataforma.nombre_plataforma}* volvió a estar Operativo", ""]
+    lineas = [f"✅ <b>{escape(plataforma.nombre_plataforma)}</b> volvió a estar Operativo", ""]
     if tiempo_ms is not None:
         lineas.append(f"⏱ Respuesta: {tiempo_ms:,}ms")
-    lineas.append(f"🌐 URL: {plataforma.url_principal}")
+    lineas.append(f"🌐 URL: {escape(plataforma.url_principal)}")
     await _enviar_mensaje("\n".join(lineas))
 
 
 async def notificar_cambio_manual(plataforma: Plataforma, estado_nuevo: str) -> None:
     texto = (
-        f"⚠️ *{plataforma.nombre_plataforma}* fue cambiada manualmente a {estado_nuevo}.\n"
-        f"🌐 URL: {plataforma.url_principal}"
+        f"⚠️ <b>{escape(plataforma.nombre_plataforma)}</b> fue cambiada manualmente a {escape(estado_nuevo)}.\n"
+        f"🌐 URL: {escape(plataforma.url_principal)}"
     )
     await _enviar_mensaje(texto)

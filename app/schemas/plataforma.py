@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -16,6 +16,9 @@ class PlataformaCreate(BaseModel):
     nombre_plataforma: str
     url_principal: str
     estado_actual: Optional[str] = "Operativo"
+    notas_credenciales: Optional[str] = None
+    notas_migracion: Optional[str] = None
+    responsable_anterior: Optional[str] = None
 
 
 class PlataformaUpdate(BaseModel):
@@ -26,6 +29,9 @@ class PlataformaUpdate(BaseModel):
     nombre_plataforma: Optional[str] = None
     url_principal: Optional[str] = None
     estado_actual: Optional[str] = None
+    notas_credenciales: Optional[str] = None
+    notas_migracion: Optional[str] = None
+    responsable_anterior: Optional[str] = None
 
 
 class PlataformaRead(BaseModel):
@@ -40,16 +46,29 @@ class PlataformaRead(BaseModel):
     url_principal: str
     estado_actual: Optional[str]
     deleted_at: Optional[datetime]
+    notas_credenciales: Optional[str] = None
+    notas_migracion: Optional[str] = None
+    responsable_anterior: Optional[str] = None
 
 
 class PlataformaReadExpanded(PlataformaRead):
     """Same as PlataformaRead plus human-readable joined names for display."""
 
     nombre_unidad: Optional[str] = None
+    # Facultad (unidad raiz) y sub-unidad (carrera/postgrado/instituto),
+    # para agrupar por facultad en el frontend
+    id_facultad: Optional[int] = None
+    nombre_facultad: Optional[str] = None
+    nombre_subunidad: Optional[str] = None
     nombre_servidor: Optional[str] = None
+    tecnologia_servidor: Optional[str] = None
     ip_publica: Optional[str] = None
     ip_privada: Optional[str] = None
     nombre_responsable: Optional[str] = None
+    telefono_responsable: Optional[str] = None
+    correo_responsable: Optional[str] = None
+    tipo_contrato_responsable: Optional[str] = None
+    fecha_actualizacion_responsable: Optional[date] = None
     nombre_tipo_plataforma: Optional[str] = None
     ultimo_estado_http: Optional[int] = None
     ultimo_tiempo_respuesta_ms: Optional[int] = None

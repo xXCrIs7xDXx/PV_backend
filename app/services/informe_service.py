@@ -15,7 +15,7 @@ mientras corre un ciclo de monitoreo.
 from __future__ import annotations
 
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
@@ -23,8 +23,9 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfgen import canvas as rl_canvas
+from fastapi import HTTPException, status
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -42,12 +43,22 @@ ESTADO_OPERATIVO = "Operativo"
 ESTADO_MANTENIMIENTO = "En Mantenimiento"
 ESTADO_REVISION = "En Revision"
 
-# Orden de las filas en el informe (igual que el documento de ejemplo:
-# primero las operativas, luego mantenimiento, luego las que requieren
-# atencion). Dentro de cada grupo, orden alfabetico.
-_ORDEN_ESTADO = {ESTADO_OPERATIVO: 0, ESTADO_MANTENIMIENTO: 1, ESTADO_REVISION: 2}
+# Orden de las filas en el informe: primero lo que requiere atencion
+# (En Revision, Error, Fuera de Servicio), luego mantenimiento y al final las
+# operativas - igual que la ventana de edicion del frontend. Dentro de cada
+# grupo, orden alfabetico.
+_ORDEN_ESTADO = {
+    ESTADO_REVISION: 0,
+    "Error": 1,
+    "Fuera de Servicio": 2,
+    ESTADO_MANTENIMIENTO: 3,
+    ESTADO_OPERATIVO: 4,
+}
 
 _ETIQUETA_ESTADO = {ESTADO_REVISION: "En Revisión"}
+
+# Estados que el admin puede asignar a mano en un informe (mismos que la app)
+ESTADOS_INFORME = {ESTADO_OPERATIVO, ESTADO_REVISION, ESTADO_MANTENIMIENTO, "Error", "Fuera de Servicio"}
 
 # Umbral a partir del cual una respuesta correcta se reporta como lenta.
 RESPUESTA_LENTA_MS = 2000
@@ -136,33 +147,82 @@ def _servidor_display(srv: Servidor | None) -> tuple[str, str | None]:
     return nombre, ip
 
 
-async def obtener_datos(session: AsyncSession) -> InformeDatos:
-    latest_sub = (
-        select(RegistroMonitoreo.id_plataforma, func.max(RegistroMonitoreo.id_registro).label("max_id"))
-        .group_by(RegistroMonitoreo.id_plataforma)
-        .subquery()
-    )
+def _utc_a_bolivia(fecha_utc: datetime) -> datetime:
+    """fecha_hora se guarda como UTC sin zona (ver app/models/monitoreo.py)."""
+    return fecha_utc - timedelta(hours=4)
+
+
+def _estado_en_registro(plat: Plataforma, reg: RegistroMonitoreo | None, historico: bool) -> str:
+    if not historico or reg is None:
+        return plat.estado_actual or ESTADO_OPERATIVO
+    # Estado que tenia la plataforma en esa verificacion. Los registros
+    # anteriores a la columna snapshot no lo tienen: se deduce del resultado.
+    if reg.estado_actual_snapshot:
+        return reg.estado_actual_snapshot
+    return ESTADO_OPERATIVO if reg.esta_operativo else ESTADO_REVISION
+
+
+async def obtener_datos(
+    session: AsyncSession, fecha: date | None = None, estados: dict[int, str] | None = None
+) -> InformeDatos:
+    """Sin `fecha`: estado actual de cada plataforma + su ultima verificacion.
+    Con `fecha` (dia de Bolivia): la ultima verificacion de cada plataforma
+    registrada ese dia, con el estado que tenia en ese momento."""
+    historico = fecha is not None
+    # Estados cambiados por el admin solo para este informe (no se guardan)
+    cambios = {k: v for k, v in (estados or {}).items() if v in ESTADOS_INFORME}
+
+    def estado_de(plat: Plataforma, reg: RegistroMonitoreo | None) -> str:
+        return cambios.get(plat.id_plataforma) or _estado_en_registro(plat, reg, historico)
+
+    latest_sub = select(RegistroMonitoreo.id_plataforma, func.max(RegistroMonitoreo.id_registro).label("max_id"))
+    if historico:
+        inicio_utc = datetime.combine(fecha, time.min) + timedelta(hours=4)
+        fin_utc = inicio_utc + timedelta(days=1)
+        latest_sub = latest_sub.where(
+            RegistroMonitoreo.fecha_hora >= inicio_utc, RegistroMonitoreo.fecha_hora < fin_utc
+        )
+    latest_sub = latest_sub.group_by(RegistroMonitoreo.id_plataforma).subquery()
+
     stmt = (
         select(Plataforma, Servidor, Responsable, RegistroMonitoreo)
         .outerjoin(Servidor, Plataforma.id_servidor == Servidor.id_servidor)
         .outerjoin(Responsable, Plataforma.id_responsable == Responsable.id_responsable)
-        .outerjoin(latest_sub, latest_sub.c.id_plataforma == Plataforma.id_plataforma)
-        .outerjoin(RegistroMonitoreo, RegistroMonitoreo.id_registro == latest_sub.c.max_id)
-        .where(Plataforma.deleted_at.is_(None))
     )
+    if historico:
+        # Solo las plataformas verificadas ese dia (incluye las que se
+        # eliminaron despues: existian en esa fecha).
+        stmt = (
+            stmt.join(latest_sub, latest_sub.c.id_plataforma == Plataforma.id_plataforma)
+            .join(RegistroMonitoreo, RegistroMonitoreo.id_registro == latest_sub.c.max_id)
+            .where(or_(Plataforma.deleted_at.is_(None), Plataforma.deleted_at >= inicio_utc))
+        )
+    else:
+        stmt = (
+            stmt.outerjoin(latest_sub, latest_sub.c.id_plataforma == Plataforma.id_plataforma)
+            .outerjoin(RegistroMonitoreo, RegistroMonitoreo.id_registro == latest_sub.c.max_id)
+            .where(Plataforma.deleted_at.is_(None))
+        )
     rows = (await session.exec(stmt)).all()
+    if historico and not rows:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No hay verificaciones registradas el {fecha:%d/%m/%Y}."
+        )
     rows = sorted(
         rows,
         key=lambda r: (
-            _ORDEN_ESTADO.get(r[0].estado_actual or ESTADO_OPERATIVO, 3),
+            _ORDEN_ESTADO.get(estado_de(r[0], r[3]), 2),
             r[0].nombre_plataforma.casefold(),
         ),
     )
 
+    ultima = max((r[3].fecha_hora for r in rows if r[3] is not None and r[3].fecha_hora), default=None)
+    fecha_datos = _utc_a_bolivia(ultima) if ultima else None
+
     filas: list[InformeFila] = []
     operativos = mantenimiento = en_revision = otros = 0
     for i, (plat, srv, resp, reg) in enumerate(rows, start=1):
-        estado = plat.estado_actual or ESTADO_OPERATIVO
+        estado = estado_de(plat, reg)
         if estado == ESTADO_OPERATIVO:
             operativos += 1
         elif estado == ESTADO_MANTENIMIENTO:
@@ -189,10 +249,13 @@ async def obtener_datos(session: AsyncSession) -> InformeDatos:
             )
         )
 
-    fecha = ahora_bolivia()
+    ahora = ahora_bolivia()
     return InformeDatos(
-        fecha_generacion=fecha,
-        nombre_archivo=nombre_archivo(fecha),
+        fecha_generacion=ahora,
+        fecha_informe=fecha,
+        fecha_datos=fecha_datos,
+        # Historico: el nombre lleva la fecha/hora de la verificacion usada
+        nombre_archivo=nombre_archivo(fecha_datos if historico and fecha_datos else ahora),
         resumen=InformeResumen(
             total=len(filas),
             operativos=operativos,
@@ -423,7 +486,9 @@ def _tabla_plataformas(filas: list[InformeFila]) -> Table:
 
 
 def construir_pdf(datos: InformeDatos) -> bytes:
-    fecha = datos.fecha_generacion
+    historico = datos.fecha_informe is not None and datos.fecha_datos is not None
+    # En un informe del historial la fecha que manda es la de la verificacion
+    fecha = datos.fecha_datos if historico else datos.fecha_generacion
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -442,7 +507,13 @@ def construir_pdf(datos: InformeDatos) -> bytes:
         Spacer(1, 2),
         Paragraph(
             f"Plataformas de Educación Virtual – Informática Educativa &nbsp;·&nbsp; "
-            f"Fecha: <b>{_fecha_larga(fecha)}</b>",
+            f"Fecha: <b>{_fecha_larga(fecha)}</b>"
+            + (
+                "<br/>Datos del historial: última verificación registrada ese día "
+                f"&nbsp;·&nbsp; Generado el {_fecha_larga(datos.fecha_generacion)}"
+                if historico
+                else ""
+            ),
             _st_sub,
         ),
         Spacer(1, 12),

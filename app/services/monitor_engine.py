@@ -1,6 +1,7 @@
-"""Async replacement for the legacy ThreadPoolExecutor+requests checker
-(verificar_campus.py). One httpx.AsyncClient is reused for the whole cycle;
-concurrency is bounded by a semaphore instead of a thread pool size."""
+"""Ciclo de monitoreo: verifica todas las plataformas con un solo
+httpx.AsyncClient (concurrencia limitada por un semaforo), guarda una fila en
+registro_monitoreo por plataforma y abre/cierra tickets y notifica por
+Telegram cuando cambia el estado."""
 from __future__ import annotations
 
 import asyncio
@@ -22,11 +23,39 @@ monitor_status: dict = {"corriendo": False, "inicio": None, "ultimo_fin": None, 
 forms_lock = asyncio.Lock()
 forms_status: dict = {"corriendo": False, "ultimo_fin": None, "ultimo_resultado": None, "ultimo_error": None}
 
-# Fallos consecutivos por plataforma. Solo cuando este contador alcanza
-# settings.monitor_confirm_failures se dispara la transicion de estado y la
-# notificacion de Telegram, evitando falsos positivos por timeouts transitorios.
-# Se resetea a 0 en cuanto la plataforma vuelve a responder correctamente.
-_consecutive_failures: dict[int, int] = {}
+
+async def _fallos_previos(session, ids: list[int], cuantos: int) -> dict[int, int]:
+    """Fallos consecutivos que cada plataforma ya acumulaba ANTES de este
+    ciclo, leidos del historial (registro_monitoreo). Antes se llevaba en
+    memoria y se perdia cada vez que Render reiniciaba el servicio, con lo
+    que una caida real podia no confirmarse nunca."""
+    if cuantos <= 0 or not ids:
+        return {}
+    rn = (
+        func.row_number()
+        .over(partition_by=RegistroMonitoreo.id_plataforma, order_by=RegistroMonitoreo.id_registro.desc())
+        .label("rn")
+    )
+    sub = (
+        select(RegistroMonitoreo.id_plataforma, RegistroMonitoreo.esta_operativo, rn)
+        .where(RegistroMonitoreo.id_plataforma.in_(ids))
+        .subquery()
+    )
+    filas = (
+        await session.exec(
+            select(sub.c.id_plataforma, sub.c.esta_operativo).where(sub.c.rn <= cuantos).order_by(sub.c.rn)
+        )
+    ).all()
+    racha: dict[int, int] = {}
+    cortada: set[int] = set()
+    for id_plat, operativo in filas:  # del mas reciente al mas antiguo
+        if id_plat in cortada:
+            continue
+        if operativo:
+            cortada.add(id_plat)
+        else:
+            racha[id_plat] = racha.get(id_plat, 0) + 1
+    return racha
 
 
 async def _check_one(client: httpx.AsyncClient, sem: asyncio.Semaphore, url: str) -> dict:
@@ -119,11 +148,7 @@ async def _submit_to_forms(plataformas: list[Plataforma], checks: list[dict]) ->
 
 
 async def _do_forms_submission(plataformas: list[Plataforma], checks: list[dict]) -> None:
-    """Shared by the automatic post-cycle send (run_check_cycle) and the
-    manual 'enviar ahora' trigger (enviar_forms_manual) so forms_status -
-    previously declared but never updated by either path - actually
-    reflects what happened, instead of staying frozen at its initial
-    value forever."""
+    """Envia y deja el resultado en forms_status (lo muestra el panel)."""
     if forms_lock.locked():
         return
     async with forms_lock:
@@ -138,11 +163,9 @@ async def _do_forms_submission(plataformas: list[Plataforma], checks: list[dict]
 
 
 async def enviar_forms_manual() -> None:
-    """Manual 'send to Google Forms now' trigger for the dashboard button.
-    Deliberately independent of GOOGLE_FORMS_ENABLED and of the monitoring
-    cycle: it reuses each platform's most recent registro_monitoreo instead
-    of re-pinging all servers, so an admin can push the current known state
-    to the audit forms on demand without waiting for/forcing a full check."""
+    """Boton "Enviar a Google Forms" del panel. Usa el ultimo
+    registro_monitoreo de cada plataforma (no vuelve a verificar los
+    servidores), asi el admin envia el ultimo estado conocido cuando quiera."""
     async with async_session_factory() as session:
         result = await session.exec(select(Plataforma).where(Plataforma.deleted_at.is_(None)))
         plataformas = result.all()
@@ -189,6 +212,10 @@ async def run_check_cycle(tipo: str = "Automatica") -> None:
             caidas: list[tuple[Plataforma, str, dict]] = []
             recuperadas: list[tuple[Plataforma, dict]] = []
             async with async_session_factory() as session:
+                # Se lee ANTES de insertar los registros de este ciclo
+                previos = await _fallos_previos(
+                    session, [p.id_plataforma for p in plataformas], settings.monitor_confirm_failures - 1
+                )
                 ejecucion = EjecucionMonitoreo(tipo=tipo)
                 session.add(ejecucion)
                 await session.flush()
@@ -204,18 +231,16 @@ async def run_check_cycle(tipo: str = "Automatica") -> None:
                     await session.flush()
                     categoria = clasificar_causa(check.get("observacion"), check.get("estado_http"))
 
-                    id_plat = plataforma.id_plataforma
                     if check["esta_operativo"]:
-                        # Recuperacion: resetear contador y manejar transicion de inmediato
-                        _consecutive_failures.pop(id_plat, None)
+                        # Recuperacion: se maneja de inmediato
                         recien_caida, recien_recuperada = await tickets_service.handle_transition(
                             session, plataforma, True, registro.id_registro, categoria
                         )
                     else:
-                        # Acumular fallos consecutivos; solo confirmar caida cuando se
-                        # alcanza el umbral (evita falsos positivos por timeouts puntuales)
-                        _consecutive_failures[id_plat] = _consecutive_failures.get(id_plat, 0) + 1
-                        if _consecutive_failures[id_plat] >= settings.monitor_confirm_failures:
+                        # Solo se confirma la caida tras MONITOR_CONFIRM_FAILURES
+                        # fallos seguidos (evita falsos positivos por timeouts puntuales)
+                        consecutivos = previos.get(plataforma.id_plataforma, 0) + 1
+                        if consecutivos >= settings.monitor_confirm_failures:
                             recien_caida, recien_recuperada = await tickets_service.handle_transition(
                                 session, plataforma, False, registro.id_registro, categoria
                             )
