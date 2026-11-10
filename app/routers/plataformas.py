@@ -17,7 +17,7 @@ from app.schemas.plataforma import (
     PlataformaUpdate,
 )
 from app.services import telegram_service
-from app.services.unidades_display import build_unidad_display_names
+from app.services.unidades_display import build_unidad_display_names, build_unidad_info
 
 router = APIRouter(prefix="/api/plataformas", tags=["plataformas"])
 
@@ -46,7 +46,8 @@ async def list_plataformas(
             Servidor.hostname,
             Servidor.ip_publica,
             Servidor.ip_privada,
-            Responsable.nombre_completo,
+            Servidor.tecnologia,
+            Responsable,
             TipoPlataforma.nombre_tipo,
             RegistroMonitoreo.estado_http,
             RegistroMonitoreo.tiempo_respuesta_ms,
@@ -70,23 +71,33 @@ async def list_plataformas(
     stmt = stmt.order_by(Plataforma.nombre_plataforma)
 
     rows = (await session.exec(stmt)).all()
-    unidad_display = await build_unidad_display_names(session)
+    unidad_info = await build_unidad_info(session)
     out = []
-    for plat, nombre_unidad, hostname, ip_pub, ip_priv, nombre_responsable, nombre_tipo, estado_http, tiempo_ms, fecha in rows:
+    for plat, nombre_unidad, hostname, ip_pub, ip_priv, tecnologia, resp, nombre_tipo, estado_http, tiempo_ms, fecha in rows:
         disp_servidor = hostname
         if hostname.lower() == "externo":
             ip = ip_pub or ip_priv
             if ip and ip != "N/A":
                 disp_servidor = f"Externo - {ip}"
+        info = unidad_info.get(plat.id_unidad)
 
         out.append(
             PlataformaReadExpanded(
                 **plat.model_dump(),
-                nombre_unidad=unidad_display.get(plat.id_unidad, nombre_unidad),
+                nombre_unidad=info.display if info else nombre_unidad,
+                id_facultad=info.id_facultad if info else plat.id_unidad,
+                nombre_facultad=info.nombre_facultad if info else nombre_unidad,
+                nombre_subunidad=info.nombre_subunidad if info else None,
                 nombre_servidor=disp_servidor,
+                tecnologia_servidor=tecnologia,
                 ip_publica=ip_pub,
                 ip_privada=ip_priv,
-                nombre_responsable=nombre_responsable,
+                nombre_responsable=resp.nombre_completo,
+                telefono_responsable=resp.telefono,
+                # Los correos "sin-correo+..." son marcadores (la columna es NOT NULL)
+                correo_responsable=None if resp.correo_institucional.startswith("sin-correo+") else resp.correo_institucional,
+                tipo_contrato_responsable=resp.tipo_contrato,
+                fecha_actualizacion_responsable=resp.fecha_actualizacion,
                 nombre_tipo_plataforma=nombre_tipo,
                 ultimo_estado_http=estado_http,
                 ultimo_tiempo_respuesta_ms=tiempo_ms,
@@ -146,17 +157,28 @@ async def create_plataforma(body: PlataformaCreate, session: AsyncSession = Depe
     ip_publica = body_dump.pop("ip_publica", None)
     
     if ip_publica:
-        # Create a new external server on the fly
-        new_srv = Servidor(
-            hostname="Externo",
-            ip_publica=ip_publica,
-            ip_privada=ip_publica,
-            estado_servidor="Desconocido"
-        )
-        session.add(new_srv)
-        await session.commit()
-        await session.refresh(new_srv)
-        body_dump["id_servidor"] = new_srv.id_servidor
+        ip_publica = ip_publica.strip()
+        # Reutiliza el servidor externo con esa IP si ya existe; si no, lo crea
+        existente = (
+            await session.exec(
+                select(Servidor).where(
+                    Servidor.ip_publica == ip_publica,
+                    Servidor.hostname == "Externo",
+                    Servidor.deleted_at.is_(None),
+                )
+            )
+        ).first()
+        if existente is None:
+            existente = Servidor(
+                hostname="Externo",
+                ip_publica=ip_publica,
+                ip_privada=ip_publica,
+                estado_servidor="Desconocido",
+                tecnologia="EXTERNO",
+            )
+            session.add(existente)
+            await session.flush()
+        body_dump["id_servidor"] = existente.id_servidor
     elif body_dump.get("id_servidor", 0) == 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Debes seleccionar un servidor o proveer una IP pública externa.")
 

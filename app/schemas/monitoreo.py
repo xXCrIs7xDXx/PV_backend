@@ -38,12 +38,6 @@ class DashboardResumen(BaseModel):
     tiempo_promedio_ms: Optional[int]
 
 
-class HistorialPunto(BaseModel):
-    fecha_hora: datetime
-    operativos: int
-    en_revision: int
-
-
 class DiaStats(BaseModel):
     operativos: int
     en_revision: int

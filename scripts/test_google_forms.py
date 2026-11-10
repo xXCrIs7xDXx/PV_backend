@@ -1,5 +1,5 @@
 """Sends exactly ONE real, clearly-marked test submission to both audit
-Google Forms, independent of GOOGLE_FORMS_ENABLED and the monitoring cycle.
+Google Forms, independent of the monitoring cycle.
 
 This writes one permanent row to each of the real production audit sheets
 (observacion is tagged "PRUEBA - puedes borrar esta fila" so it's easy to

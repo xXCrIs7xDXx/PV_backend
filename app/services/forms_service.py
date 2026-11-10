@@ -1,8 +1,8 @@
-"""Replaces the legacy PowerShell scripts that filled the university's two
-audit Google Forms by hand after every check. Gated entirely by
-settings.google_forms_enabled (off by default, see config.py) because every
-successful POST writes a permanent row into the real, production audit
-spreadsheets - this is not a sandbox endpoint.
+"""Reemplaza los scripts de PowerShell que llenaban a mano los dos Google
+Forms de auditoria de la universidad. Solo se dispara con el boton "Enviar a
+Google Forms" del panel (POST /api/monitoreo/enviar-forms): cada envio
+escribe filas REALES y permanentes en las planillas de produccion, no es un
+entorno de pruebas.
 
 Field mapping (entry.* ids) was supplied by the DTIC and must match the
 forms' real fields exactly:
