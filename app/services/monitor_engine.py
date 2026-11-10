@@ -62,7 +62,9 @@ async def _check_one(client: httpx.AsyncClient, sem: asyncio.Semaphore, url: str
     async with sem:
         start = time.monotonic()
         try:
-            resp = await client.get(url)
+            # strip(): una URL guardada con un tab/espacio al final (copiada de
+            # Excel) hacia fallar el ciclo entero el 09/11/2026
+            resp = await client.get(url.strip())
             elapsed_ms = int((time.monotonic() - start) * 1000)
             operativo = resp.status_code < 400
             return {
@@ -85,12 +87,12 @@ async def _check_one(client: httpx.AsyncClient, sem: asyncio.Semaphore, url: str
                 "esta_operativo": False,
                 "observacion": "Sin conexion / dominio no responde",
             }
-        except httpx.HTTPError as e:
+        except Exception as e:  # noqa: BLE001 - una URL invalida no debe tirar el ciclo de TODAS
             return {
                 "estado_http": None,
                 "tiempo_respuesta_ms": int((time.monotonic() - start) * 1000),
                 "esta_operativo": False,
-                "observacion": str(e)[:200],
+                "observacion": str(e)[:200] or type(e).__name__,
             }
 
 

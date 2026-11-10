@@ -1,13 +1,20 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.schemas.catalogo import ResponsableRead, ServidorRead
 from app.schemas.monitoreo import RegistroMonitoreoRead
 
 
+def _limpiar_url(v: Optional[str]) -> Optional[str]:
+    # Quita tabs/espacios/saltos de linea (pasa al copiar desde Excel)
+    return "".join(v.split()) if isinstance(v, str) else v
+
+
 class PlataformaCreate(BaseModel):
+    _url = field_validator("url_principal", mode="before")(_limpiar_url)
+
     id_unidad: int
     id_servidor: int = 0
     ip_publica: Optional[str] = None
@@ -22,6 +29,8 @@ class PlataformaCreate(BaseModel):
 
 
 class PlataformaUpdate(BaseModel):
+    _url = field_validator("url_principal", mode="before")(_limpiar_url)
+
     id_unidad: Optional[int] = None
     id_servidor: Optional[int] = None
     id_responsable: Optional[int] = None
