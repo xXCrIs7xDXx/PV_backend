@@ -19,7 +19,7 @@ from app.schemas.monitoreo import (
     MonitorEstado,
     RegistroMonitoreoRead,
 )
-from app.services import monitor_engine
+from app.services import backups_vigilancia, monitor_engine
 from app.services.retencion_service import purgar_registros_antiguos
 from app.services.unidades_display import build_unidad_display_names
 
@@ -56,6 +56,8 @@ async def forzar_ejecucion(background_tasks: BackgroundTasks, token: str | None 
     background_tasks.add_task(monitor_engine.run_check_cycle, tipo="Externa")
     # Mantenimiento: borra el historial mas antiguo que RETENCION_REGISTROS_MESES
     background_tasks.add_task(purgar_registros_antiguos)
+    # Avisa si el agente de respaldos del PC con Windows dejo de responder
+    background_tasks.add_task(backups_vigilancia.revisar)
     return {"ok": True, "mensaje": "Monitoreo iniciado en segundo plano"}
 
 

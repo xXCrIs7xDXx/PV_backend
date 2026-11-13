@@ -1,0 +1,4 @@
+# Dependencias del AGENTE de respaldos (PC con Windows). Render solo usa requirements.txt.
+-r requirements.txt
+# Hoja de registro .xlsx que se deja en Google Drive (app/backups/hoja.py)
+openpyxl>=3.1

@@ -39,6 +39,11 @@ async def _enviar_mensaje(texto: str) -> None:
         print(f"Telegram: error al enviar notificacion -> {e}")
 
 
+async def enviar_alerta(texto_html: str) -> None:
+    """Mensaje libre (ya escapado) - lo usa el agente de respaldos."""
+    await _enviar_mensaje(texto_html[:4000])  # limite de Telegram: 4096
+
+
 async def notificar_caida_automatica(
     plataforma: Plataforma,
     categoria: str,
