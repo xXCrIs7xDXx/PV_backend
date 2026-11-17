@@ -1,12 +1,3 @@
-from app.models.backups import (
-    BackupAgente,
-    BackupArchivo,
-    BackupEjecucion,
-    BackupEvento,
-    BackupRespaldo,
-    BackupServidor,
-    BackupSolicitud,
-)
 from app.models.catalogo import (
     Responsable,
     Servidor,
@@ -27,11 +18,4 @@ __all__ = [
     "EjecucionMonitoreo",
     "RegistroMonitoreo",
     "TicketIncidencia",
-    "BackupServidor",
-    "BackupRespaldo",
-    "BackupArchivo",
-    "BackupEjecucion",
-    "BackupEvento",
-    "BackupSolicitud",
-    "BackupAgente",
 ]

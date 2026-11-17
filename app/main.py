@@ -12,7 +12,6 @@ if sys.platform == "win32":
 from app.config import settings  # noqa: E402
 from app.routers import (  # noqa: E402
     auth,
-    backups,
     catalogos,
     dashboard,
     informes,
@@ -52,7 +51,6 @@ for _router in (
     tickets.router,
     stats.router,
     informes.router,
-    backups.router,
 ):
     app.include_router(_router)
 
