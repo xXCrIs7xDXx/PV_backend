@@ -29,11 +29,12 @@ from sqlalchemy import func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models import Plataforma, RegistroMonitoreo, Responsable, Servidor
+from app.models import Plataforma, RegistroMonitoreo, Responsable, Servidor, TicketIncidencia
 from app.schemas.informe import (
     DESCRIPCION_MAX_LEN,
     InformeDatos,
     InformeFila,
+    InformeIncidencia,
     InformeResumen,
 )
 
@@ -162,6 +163,135 @@ def _estado_en_registro(plat: Plataforma, reg: RegistroMonitoreo | None, histori
     return ESTADO_OPERATIVO if reg.esta_operativo else ESTADO_REVISION
 
 
+RESULTADO_RECUPERADA = "Recuperada"
+RESULTADO_SIGUE_CAIDA = "Sigue caída"
+RESULTADO_AISLADA = "Falla aislada"
+
+# Estados que maneja el monitor solo. Las fallas de plataformas puestas a
+# mano en Mantenimiento / Error / Fuera de Servicio no son "caidas del dia":
+# el admin ya sabe de ellas.
+_ESTADOS_AUTOMATICOS = {None, ESTADO_OPERATIVO, ESTADO_REVISION}
+
+
+async def obtener_incidencias(
+    session: AsyncSession, dia: date
+) -> tuple[list[InformeIncidencia], list[str]]:
+    """Caidas ocurridas en `dia` (hora de Bolivia): cada racha de
+    verificaciones fallidas seguidas de una plataforma es una incidencia.
+    Devuelve (incidencias, persistentes): las rachas que ya venian del dia
+    anterior y no se recuperaron no se listan como incidencia, solo por
+    nombre, porque no "pasaron" ese dia."""
+    inicio_utc = datetime.combine(dia, time.min) + timedelta(hours=4)
+    fin_utc = inicio_utc + timedelta(days=1)
+    en_el_dia = (RegistroMonitoreo.fecha_hora >= inicio_utc, RegistroMonitoreo.fecha_hora < fin_utc)
+
+    con_fallas = (
+        select(RegistroMonitoreo.id_plataforma)
+        .where(*en_el_dia, RegistroMonitoreo.esta_operativo.is_(False))
+        .distinct()
+    )
+    rows = (
+        await session.exec(
+            select(RegistroMonitoreo, Plataforma, Servidor)
+            .join(Plataforma, Plataforma.id_plataforma == RegistroMonitoreo.id_plataforma)
+            .outerjoin(Servidor, Plataforma.id_servidor == Servidor.id_servidor)
+            .where(*en_el_dia, RegistroMonitoreo.id_plataforma.in_(con_fallas))
+            .order_by(RegistroMonitoreo.id_plataforma, RegistroMonitoreo.id_registro)
+        )
+    ).all()
+    if not rows:
+        return [], []
+
+    ids = {r[0].id_plataforma for r in rows}
+    # Ultimo resultado ANTES del dia: dice si la primera falla del dia
+    # empezo ese dia o venia de antes.
+    previo_sub = (
+        select(RegistroMonitoreo.id_plataforma, func.max(RegistroMonitoreo.id_registro).label("max_id"))
+        .where(RegistroMonitoreo.id_plataforma.in_(ids), RegistroMonitoreo.fecha_hora < inicio_utc)
+        .group_by(RegistroMonitoreo.id_plataforma)
+        .subquery()
+    )
+    previo_ok = {
+        r.id_plataforma: r.esta_operativo
+        for r in (
+            await session.exec(
+                select(RegistroMonitoreo).join(previo_sub, RegistroMonitoreo.id_registro == previo_sub.c.max_id)
+            )
+        ).all()
+    }
+
+    ids_falla = [r[0].id_registro for r in rows if not r[0].esta_operativo]
+    ticket_de = {
+        t.id_registro_falla: t.id_ticket
+        for t in (
+            await session.exec(select(TicketIncidencia).where(TicketIncidencia.id_registro_falla.in_(ids_falla)))
+        ).all()
+    }
+
+    incidencias: list[InformeIncidencia] = []
+    persistentes: list[str] = []
+
+    def cerrar(plat: Plataforma, srv: Servidor | None, fallas: list[RegistroMonitoreo],
+               recuperacion: RegistroMonitoreo | None, venia: bool) -> None:
+        primera = fallas[0]
+        if primera.estado_actual_snapshot not in _ESTADOS_AUTOMATICOS:
+            return
+        if venia and recuperacion is None:
+            persistentes.append(plat.nombre_plataforma)
+            return
+        if recuperacion is None:
+            resultado = RESULTADO_SIGUE_CAIDA
+        elif len(fallas) == 1 and not venia:
+            resultado = RESULTADO_AISLADA
+        else:
+            resultado = RESULTADO_RECUPERADA
+        inicio = None if venia else _utc_a_bolivia(primera.fecha_hora)
+        fin = _utc_a_bolivia(recuperacion.fecha_hora) if recuperacion else None
+        duracion = None
+        if inicio is not None and resultado != RESULTADO_AISLADA:
+            hasta = fin or _utc_a_bolivia(fallas[-1].fecha_hora)
+            duracion = round((hasta - inicio).total_seconds() / 60)
+        incidencias.append(
+            InformeIncidencia(
+                id_plataforma=plat.id_plataforma,
+                nombre_plataforma=plat.nombre_plataforma,
+                servidor=_servidor_display(srv)[0],
+                inicio=inicio,
+                fin=fin,
+                duracion_min=duracion,
+                causa=_problema(primera),
+                resultado=resultado,
+                verificaciones_fallidas=len(fallas),
+                id_ticket=next((ticket_de[f.id_registro] for f in fallas if f.id_registro in ticket_de), None),
+            )
+        )
+
+    actual: int | None = None
+    plat = srv = None
+    fallas: list[RegistroMonitoreo] = []
+    venia = False
+    for reg, p, s in rows + [(None, None, None)]:  # centinela para cerrar la ultima racha
+        if reg is None or reg.id_plataforma != actual:
+            if fallas:
+                cerrar(plat, srv, fallas, None, venia)
+            if reg is None:
+                break
+            actual, plat, srv, fallas = reg.id_plataforma, p, s, []
+            venia = previo_ok.get(reg.id_plataforma) is False
+        if not reg.esta_operativo:
+            fallas.append(reg)
+        else:
+            if fallas:
+                cerrar(plat, srv, fallas, reg, venia)
+                fallas = []
+            # Tras una verificacion correcta, la siguiente falla ya es del dia
+            venia = False
+
+    incidencias.sort(key=lambda i: (i.inicio is not None, i.inicio or datetime.min, i.nombre_plataforma))
+    persistentes.sort(key=str.casefold)
+    return incidencias, persistentes
+
+
 async def obtener_datos(
     session: AsyncSession, fecha: date | None = None, estados: dict[int, str] | None = None
 ) -> InformeDatos:
@@ -250,6 +380,7 @@ async def obtener_datos(
         )
 
     ahora = ahora_bolivia()
+    incidencias, persistentes = await obtener_incidencias(session, fecha or ahora.date())
     return InformeDatos(
         fecha_generacion=ahora,
         fecha_informe=fecha,
@@ -264,6 +395,8 @@ async def obtener_datos(
             otros=otros,
         ),
         filas=filas,
+        incidencias=incidencias,
+        caidas_persistentes=persistentes,
     )
 
 
@@ -485,6 +618,129 @@ def _tabla_plataformas(filas: list[InformeFila]) -> Table:
     return tabla
 
 
+COLOR_RESULTADO = {
+    RESULTADO_RECUPERADA: COLOR_ESTADO[ESTADO_OPERATIVO],
+    RESULTADO_SIGUE_CAIDA: COLOR_ESTADO[ESTADO_REVISION],
+    RESULTADO_AISLADA: COLOR_ESTADO[ESTADO_MANTENIMIENTO],
+}
+
+# Nro, Plataforma, Servidor, Detectada, Recuperada, Duracion, Causa, Resultado -> 720 pt
+_ANCHOS_INC = [24, 160, 90, 58, 62, 64, 166, 96]
+
+
+def _duracion(minutos: int | None) -> str:
+    if minutos is None:
+        return "—"
+    h, m = divmod(minutos, 60)
+    if h and m:
+        return f"{h} h {m} min"
+    return f"{h} h" if h else f"{m} min"
+
+
+def _seccion_incidencias(datos: InformeDatos, fecha: datetime, historico: bool) -> list:
+    incidencias = datos.incidencias
+    if historico:
+        titulo = f"Caídas e incidencias del día ({fecha:%d/%m/%Y})"
+    else:
+        titulo = f"Caídas e incidencias de hoy (hasta las {datos.fecha_generacion:%H:%M})"
+    if incidencias:
+        titulo += f" &nbsp;·&nbsp; {len(incidencias)} registrada{'s' if len(incidencias) != 1 else ''}"
+    partes: list = [Paragraph(titulo, _st_seccion), Spacer(1, 6)]
+
+    if not incidencias:
+        aviso = Table(
+            [[Paragraph("Sin caídas nuevas: ninguna plataforma dejó de responder durante el día.", _st_cel_b)]],
+            colWidths=[PAGE_SIZE[0] - 2 * MARGEN_X],
+        )
+        verde, fondo_verde = COLOR_ESTADO[ESTADO_OPERATIVO]
+        aviso.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), fondo_verde),
+                    ("LINEBEFORE", (0, 0), (0, 0), 3.5, verde),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+        partes.append(aviso)
+    else:
+        encabezados = ["Nro", "Plataforma", "Servidor", "Detectada", "Recuperada", "Duración aprox.", "Causa", "Resultado"]
+        data = [[Paragraph(h, _st_head_c if i in (0, 3, 4, 5, 7) else _st_head) for i, h in enumerate(encabezados)]]
+        estilos = [
+            ("BACKGROUND", (0, 0), (-1, 0), AZUL),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, 0), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+            ("LINEBELOW", (0, 1), (-1, -1), 0.4, GRIS_LINEA),
+            ("BOX", (0, 0), (-1, -1), 0.6, GRIS_LINEA),
+        ]
+        for i, inc in enumerate(incidencias, start=1):
+            color, fondo = COLOR_RESULTADO.get(inc.resultado, COLOR_OTRO)
+            st_res = ParagraphStyle(f"res{i}", parent=_st_cel_c, fontName="Helvetica-Bold", textColor=color)
+            resultado = _e(inc.resultado)
+            if inc.id_ticket:
+                resultado += f'<br/><font name="Helvetica" color="#5B6475" size="6.5">Ticket #{inc.id_ticket}</font>'
+            detectada = f"{inc.inicio:%H:%M}" if inc.inicio else "Día anterior"
+            recuperada = f"{inc.fin:%H:%M}" if inc.fin else "—"
+            if inc.resultado == RESULTADO_AISLADA:
+                duracion = "Puntual"
+            else:
+                duracion = _duracion(inc.duracion_min)
+                if inc.fin is None and inc.duracion_min is not None:
+                    duracion = "Más de " + duracion
+            causa = _e(inc.causa)
+            if inc.verificaciones_fallidas > 1:
+                causa += (
+                    f'<br/><font color="#5B6475" size="6.5">'
+                    f"{inc.verificaciones_fallidas} verificaciones fallidas seguidas</font>"
+                )
+            data.append(
+                [
+                    Paragraph(str(i), _st_cel_c),
+                    Paragraph(_e(inc.nombre_plataforma), _st_cel_b),
+                    Paragraph(_e(inc.servidor), _st_cel),
+                    Paragraph(detectada, _st_cel_c),
+                    Paragraph(recuperada, _st_cel_c),
+                    Paragraph(duracion, _st_cel_c),
+                    Paragraph(causa, _st_cel),
+                    Paragraph(resultado, st_res),
+                ]
+            )
+            if i % 2 == 0:
+                estilos.append(("BACKGROUND", (0, i), (-1, i), FONDO_ZEBRA))
+            estilos.append(("BACKGROUND", (7, i), (7, i), fondo))
+        tabla = Table(data, colWidths=_ANCHOS_INC, repeatRows=1)
+        tabla.setStyle(TableStyle(estilos))
+        partes.append(tabla)
+
+    notas = []
+    if datos.caidas_persistentes:
+        notas.append(
+            "<b>Sin responder todo el día</b> (la falla viene de días anteriores): "
+            + ", ".join(_e(n) for n in datos.caidas_persistentes)
+            + "."
+        )
+    if incidencias:
+        notas.append(
+            "El monitor verifica cada hora: <b>Detectada</b> es la primera verificación fallida y "
+            "<b>Recuperada</b> la primera que volvió a responder, por lo que la duración es aproximada."
+            + (
+                " <b>Falla aislada</b>: una sola verificación fallida que el monitor no llegó a confirmar como caída."
+                if any(i.resultado == RESULTADO_AISLADA for i in incidencias)
+                else ""
+            )
+        )
+    if notas:
+        partes += [Spacer(1, 5), Paragraph("<br/>".join(notas), _st_nota)]
+    return partes
+
+
 def construir_pdf(datos: InformeDatos) -> bytes:
     historico = datos.fecha_informe is not None and datos.fecha_datos is not None
     # En un informe del historial la fecha que manda es la de la verificacion
@@ -518,6 +774,8 @@ def construir_pdf(datos: InformeDatos) -> bytes:
         ),
         Spacer(1, 12),
         _tarjetas(datos.resumen),
+        Spacer(1, 16),
+        *_seccion_incidencias(datos, fecha, historico),
         Spacer(1, 16),
         Paragraph(f"{fecha:%d-%m-%Y} – Monitoreo Plataformas Virtuales", _st_seccion),
         Spacer(1, 6),

@@ -33,6 +33,24 @@ class InformeResumen(BaseModel):
     otros: int
 
 
+class InformeIncidencia(BaseModel):
+    """Una caida (racha de verificaciones fallidas seguidas) ocurrida en el
+    dia del informe. Horas en hora de Bolivia."""
+
+    id_plataforma: int
+    nombre_plataforma: str
+    servidor: str
+    # None = la racha ya venia del dia anterior
+    inicio: Optional[datetime] = None
+    # Primera verificacion correcta despues de la falla (None = sigue caida)
+    fin: Optional[datetime] = None
+    duracion_min: Optional[int] = None
+    causa: str
+    resultado: str  # "Recuperada" | "Sigue caída" | "Falla aislada"
+    verificaciones_fallidas: int
+    id_ticket: Optional[int] = None
+
+
 class InformeDatos(BaseModel):
     fecha_generacion: datetime  # hora local de Bolivia (UTC-4)
     # Dia del historial pedido (None = estado actual de las plataformas)
@@ -42,6 +60,10 @@ class InformeDatos(BaseModel):
     nombre_archivo: str
     resumen: InformeResumen
     filas: list[InformeFila]
+    # Caidas del dia del informe (hoy hasta ahora, o el dia del historial)
+    incidencias: list[InformeIncidencia] = Field(default_factory=list)
+    # Plataformas que siguieron caidas todo el dia (falla de dias anteriores)
+    caidas_persistentes: list[str] = Field(default_factory=list)
 
 
 class InformePdfRequest(BaseModel):
